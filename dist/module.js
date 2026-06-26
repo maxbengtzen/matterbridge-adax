@@ -321,12 +321,15 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
   }
 
   async onShutdown(reason) {
+    this.log.info('Adax plugin shutdown', reason);
     if (this._interval) clearInterval(this._interval);
     if (this._pollTimer) clearTimeout(this._pollTimer);
-    this._rooms.forEach(({ device }) => {
-      this.unregisterDevice(device).catch(() => {});
-    });
+    if (this.config.unregisterOnShutdown === true) {
+      for (const { device } of this._rooms) {
+        await this.unregisterDevice(device).catch(() => {});
+      }
+    }
     this._rooms = [];
-    this.log.info('Adax plugin shutdown');
+    await super.onShutdown(reason);
   }
 }

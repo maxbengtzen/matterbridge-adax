@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — 2026-06-26
+
+### Fixed
+- `onShutdown` now calls `super.onShutdown()` to persist endpoint number mappings across restarts
+- `unregisterDevice` only runs when `unregisterOnShutdown` config is `true` (default `false`), preventing Apple Home from losing room assignments after bridge restart
+
 ## 0.2.0 — 2026-06-26
 
 ### Added
