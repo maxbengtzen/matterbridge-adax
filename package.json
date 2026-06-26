@@ -1,0 +1,32 @@
+{
+  "name": "matterbridge-adax",
+  "version": "0.1.0",
+  "description": "Matterbridge plugin for Adax WiFi heaters",
+  "author": "@maxbengtzen",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/module.js",
+  "exports": {
+    ".": {
+      "import": "./dist/module.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxbengtzen/matterbridge-adax.git"
+  },
+  "homepage": "https://github.com/maxbengtzen/matterbridge-adax#readme",
+  "bugs": {
+    "url": "https://github.com/maxbengtzen/matterbridge-adax/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "matterbridge",
+    "matter",
+    "adax",
+    "heater",
+    "thermostat"
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "title": "Adax WiFi Heaters",
+  "description": "Matterbridge plugin for Adax WiFi heaters",
+  "type": "object",
+  "properties": {
+    "name": {
+      "title": "Plugin Name",
+      "description": "Plugin name",
+      "type": "string",
+      "readOnly": true,
+      "ui:widget": "hidden"
+    },
+    "type": {
+      "title": "Plugin Type",
+      "description": "Plugin type",
+      "type": "string",
+      "readOnly": true,
+      "ui:widget": "hidden"
+    },
+    "version": {
+      "title": "Plugin Version",
+      "description": "Plugin version",
+      "type": "string",
+      "readOnly": true,
+      "ui:widget": "hidden"
+    },
+    "debug": {
+      "title": "Enable Debug",
+      "description": "Enable debug logging for the plugin",
+      "type": "boolean",
+      "default": false
+    },
+    "unregisterOnShutdown": {
+      "title": "Unregister On Shutdown",
+      "description": "Unregister all devices on shutdown (development only)",
+      "type": "boolean",
+      "default": false
+    },
+    "accountId": {
+      "title": "Account ID",
+      "description": "Your numeric Adax account ID from the Adax WiFi app (under Account)",
+      "type": "number"
+    },
+    "clientSecret": {
+      "title": "Client Secret",
+      "description": "Adax API client secret from Adax WiFi app: Account → Remote user client API → Add Credential",
+      "type": "string",
+      "default": ""
+    },
+    "pollInterval": {
+      "title": "Poll interval (ms)",
+      "description": "How often the Adax API is polled (minimum 10000)",
+      "type": "number",
+      "default": 30000,
+      "minimum": 10000
+    }
+  },
+  "required": ["accountId", "clientSecret"]
+}
