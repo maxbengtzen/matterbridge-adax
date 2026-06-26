@@ -25,7 +25,7 @@ matterbridge --enable matterbridge-adax
 Clone or copy the plugin to your Matterbridge plugins directory:
 
 ```bash
-git clone https://github.com/YOUR_USER/matterbridge-adax.git /root/Matterbridge/matterbridge-adax
+git clone https://github.com/maxbengtzen/matterbridge-adax.git /root/Matterbridge/matterbridge-adax
 matterbridge --add /root/Matterbridge/matterbridge-adax
 matterbridge --enable /root/Matterbridge/matterbridge-adax
 ```
@@ -68,8 +68,6 @@ The plugin authenticates with the Adax cloud API using OAuth2 (password grant), 
 - Current temperature (`localTemperature`)
 - Target temperature (`occupiedHeatingSetpoint`)
 - System mode (off/heat)
-- Power source information
-
 Changes made in Apple Home (or any Matter controller) are sent back to the Adax cloud API via REST.
 
 ## Rate Limiting
@@ -79,6 +77,10 @@ The Adax API enforces a rate limit of 1 request per 30 seconds. The plugin handl
 ## API Reference
 
 Adax API documentation: https://adax.no/se/wi-fi/api-development-2/
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md).
 
 ## License
 

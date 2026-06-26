@@ -1,6 +1,5 @@
 import {
   bridgedNode,
-  powerSource,
   MatterbridgeDynamicPlatform,
   MatterbridgeEndpoint,
   thermostat,
@@ -19,6 +18,10 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
   _token = null;
   _tokenExpires = 0;
   _lastApiValues = new Map();
+  _lastNonZeroTarget = new Map();
+  _polling = false;
+  _pollTimer = null;
+  _consecutiveErrors = 0;
 
   constructor(matterbridge, log, config) {
     super(matterbridge, log, config);
@@ -113,6 +116,11 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
 
   async _fetchRooms() {
     const res = await this._fetchWithAuth(`${API_BASE}/rest/v1/content/`);
+    if (!res) return null;
+    if (res.status === 429) {
+      this.log.warn('API rate limited during poll');
+      return null;
+    }
     if (!res.ok) throw new Error(`Fetch rooms HTTP ${res.status}`);
     const data = await res.json();
     return data.rooms ?? [];
@@ -127,7 +135,7 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
     const currentTemp = (room.temperature ?? targetTemp) / 100;
 
     const device = new MatterbridgeEndpoint(
-      [thermostat, bridgedNode, powerSource],
+      [thermostat, bridgedNode],
       { id },
       this.config.debug,
     )
@@ -165,7 +173,7 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
         if (prevSetpoint && prevSetpoint.setpoint === value) return;
         const temp = value / 100;
         this.log.info(`${name}: heatingSetpoint changed to ${temp}C`);
-        this._setTargetTemp(room.id, name, temp);
+        this._setTargetTemp(room.id, name, temp, true);
       },
       this.log,
     );
@@ -178,7 +186,7 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
         if (prevCool && prevCool.setpoint === value) return;
         const temp = value / 100;
         this.log.info(`${name}: coolingSetpoint changed to ${temp}C`);
-        this._setTargetTemp(room.id, name, temp);
+        this._setTargetTemp(room.id, name, temp, true);
       },
       this.log,
     );
@@ -203,7 +211,7 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
       device.log.info(
         `setpointRaiseLower mode: ${['Heat', 'Cool', 'Both'][mode]} amount: ${amount / 10}`,
       );
-      this._setTargetTemp(room.id, name, newSetpoint);
+      this._setTargetTemp(room.id, name, newSetpoint, true);
     });
 
     this._rooms.push({ id: room.id, name, device, serial });
@@ -211,41 +219,54 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
   }
 
   _handleModeChange(roomId, name, systemMode) {
-    if (systemMode === 0) {
-      this._setTargetTemp(roomId, name, 7);
-    } else {
-      const deviceData = this._rooms.find((r) => r.id === roomId);
-      if (deviceData) {
-        const current = deviceData.device.getAttribute(
-          Thermostat.id,
-          'occupiedHeatingSetpoint',
-          this.log,
-        );
-        this._setTargetTemp(roomId, name, (current ?? 2100) / 100);
-      }
-    }
+    this._setTargetTemp(roomId, name, undefined, systemMode !== 0);
   }
 
-  async _setTargetTemp(roomId, name, temperature) {
-    const tempHundredths = Math.round(temperature * 100);
+  async _setTargetTemp(roomId, name, temperature, heatingEnabled) {
     try {
+      const body = { rooms: [{ id: roomId }] };
+      if (heatingEnabled === true) {
+        const prev = this._lastNonZeroTarget.get(roomId) ?? 2100;
+        const setpoint = temperature != null ? Math.round(temperature * 100) : prev;
+        body.rooms[0].targetTemperature = String(setpoint);
+        body.rooms[0].heatingEnabled = 'true';
+      } else if (heatingEnabled === false) {
+        body.rooms[0].heatingEnabled = 'false';
+      } else if (temperature != null) {
+        const tempHundredths = Math.round(temperature * 100);
+        body.rooms[0].targetTemperature = String(tempHundredths);
+      } else {
+        return;
+      }
       const res = await this._fetchWithAuth(`${API_BASE}/rest/v1/control/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rooms: [{ id: roomId, targetTemperature: String(tempHundredths) }],
-        }),
+        body: JSON.stringify(body),
       });
+      if (res.status === 429) {
+        this.log.warn(`${name}: API rate limited, backing off`);
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      this.log.info(`${name}: set target to ${temperature.toFixed(1)}C`);
+      this.log.info(`${name}: set target to ${JSON.stringify(body.rooms[0])}`);
+      if (this._pollTimer) clearTimeout(this._pollTimer);
+      this._pollTimer = setTimeout(() => this._pollAll(), 2_000);
     } catch (err) {
       this.log.error(`${name}: Set temp failed: ${err.message}`);
     }
   }
 
   async _pollAll() {
+    if (this._polling) return;
+    this._polling = true;
     try {
       const rooms = await this._fetchRooms();
+      if (rooms === null) {
+        this._consecutiveErrors++;
+        this.log.warn(`Poll failed, consecutive errors: ${this._consecutiveErrors}`);
+        return;
+      }
+      this._consecutiveErrors = 0;
       for (const room of rooms) {
         const deviceData = this._rooms.find((r) => r.id === room.id);
         if (!deviceData) continue;
@@ -253,18 +274,27 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
       }
     } catch (err) {
       this.log.error(`Poll error: ${err.message}`);
+    } finally {
+      this._polling = false;
     }
   }
 
   _updateState(device, room, name) {
     const currentTemp = (room.temperature ?? 2100) / 100;
-    const targetTemp = (room.targetTemperature ?? 2100) / 100;
+    const rawTarget = room.targetTemperature;
+    const targetHundredths = rawTarget != null ? Number(rawTarget) : 2100;
     const heating = room.heatingEnabled === true;
+
+    if (targetHundredths > 0) {
+      this._lastNonZeroTarget.set(room.id, targetHundredths);
+    }
+
+    const displayTarget = targetHundredths > 0 ? targetHundredths : (this._lastNonZeroTarget.get(room.id) ?? 2100);
     const systemMode = heating ? 4 : 0;
 
     this._lastApiValues.set(room.id, {
       mode: systemMode,
-      setpoint: Math.round(targetTemp * 100),
+      setpoint: displayTarget,
     });
 
     device.updateAttribute(
@@ -277,13 +307,13 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
     device.updateAttribute(
       Thermostat.id,
       'occupiedHeatingSetpoint',
-      Math.round(targetTemp * 100),
+      displayTarget,
       this.log,
     );
     device.updateAttribute(
       Thermostat.id,
       'occupiedCoolingSetpoint',
-      Math.round(targetTemp * 100),
+      displayTarget,
       this.log,
     );
 
@@ -292,6 +322,7 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
 
   async onShutdown(reason) {
     if (this._interval) clearInterval(this._interval);
+    if (this._pollTimer) clearTimeout(this._pollTimer);
     this._rooms.forEach(({ device }) => {
       this.unregisterDevice(device).catch(() => {});
     });
