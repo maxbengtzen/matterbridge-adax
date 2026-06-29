@@ -7,6 +7,8 @@ import {
 import { Thermostat } from 'matterbridge/matter/clusters';
 
 const API_BASE = 'https://api-1.adax.no/client-api';
+const MIN_REQUEST_INTERVAL = 30_000;
+const HTTP_TIMEOUT = 10_000;
 
 export default function initializePlugin(matterbridge, log, config) {
   return new AdaxMatterbridgePlatform(matterbridge, log, config);
@@ -14,14 +16,15 @@ export default function initializePlugin(matterbridge, log, config) {
 
 export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
   _rooms = [];
-  _interval;
+  _pollTimer = null;
   _token = null;
   _tokenExpires = 0;
   _lastApiValues = new Map();
   _lastNonZeroTarget = new Map();
-  _polling = false;
-  _pollTimer = null;
+  _lastApiCall = 0;
   _consecutiveErrors = 0;
+  _apiQueue = [];
+  _apiQueueProcessing = false;
 
   constructor(matterbridge, log, config) {
     super(matterbridge, log, config);
@@ -47,7 +50,7 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
 
     if (!this._accountId || !this._clientSecret) {
       this.log.error(
-        'accountId and clientSecret must be configured. Generate credentials in Adax WiFi app: Account → Remote user client API → Add Credential',
+        'accountId and clientSecret must be configured. Generate credentials in Adax WiFi app: Account \u2192 Remote user client API \u2192 Add Credential',
       );
       return;
     }
@@ -55,13 +58,55 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
     await this._authenticate();
 
     const rooms = await this._fetchRooms();
-    for (const room of rooms) {
-      await this._createDevice(room);
+    if (rooms) {
+      for (const room of rooms) {
+        await this._createDevice(room);
+      }
     }
 
-    const pollInterval = this.config.pollInterval ?? 30_000;
-    this._interval = setInterval(() => this._pollAll(), pollInterval);
-    setTimeout(() => this._pollAll(), 3_000);
+    this._schedulePoll();
+
+    this.log.info(
+      `Adax plugin ready: ${this._rooms.length} device(s), poll interval ${Math.round(Math.max(this.config.pollInterval ?? 60_000, 30_000) / 1000)}s`,
+    );
+  }
+
+  _sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  _enqueueApiCall(fn) {
+    return new Promise((resolve, reject) => {
+      this._apiQueue.push({ fn, resolve, reject });
+      this._processApiQueue();
+    });
+  }
+
+  async _processApiQueue() {
+    if (this._apiQueueProcessing) return;
+    this._apiQueueProcessing = true;
+
+    while (this._apiQueue.length > 0) {
+      const elapsed = Date.now() - this._lastApiCall;
+      const remaining = MIN_REQUEST_INTERVAL - elapsed;
+      if (remaining > 0) {
+        this.log.debug(`Rate limit: waiting ${remaining}ms before next API call`);
+        await this._sleep(remaining);
+      }
+
+      const { fn, resolve, reject } = this._apiQueue.shift();
+      try {
+        const result = await fn();
+        this._lastApiCall = Date.now();
+        resolve(result);
+      } catch (err) {
+        this.log.debug(`API call failed, waiting 5s before next: ${err.message}`);
+        await this._sleep(5_000);
+        reject(err);
+      }
+    }
+
+    this._apiQueueProcessing = false;
   }
 
   async _authenticate() {
@@ -74,6 +119,7 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
           username: String(this._accountId),
           password: this._clientSecret,
         }),
+        signal: AbortSignal.timeout(HTTP_TIMEOUT),
       });
       if (!res.ok) throw new Error(`Auth HTTP ${res.status}`);
       const data = await res.json();
@@ -94,21 +140,34 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
 
   async _fetchWithAuth(url, options = {}) {
     await this._ensureAuth();
-    const res = await fetch(url, {
+    let res = await fetch(url, {
       ...options,
       headers: {
         ...options.headers,
         Authorization: `Bearer ${this._token}`,
       },
+      signal: AbortSignal.timeout(HTTP_TIMEOUT),
+    }).catch((err) => {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        throw new Error(`Request timed out after ${HTTP_TIMEOUT / 1000}s`);
+      }
+      throw err;
     });
     if (res.status === 401) {
+      this.log.info('Token expired, re-authenticating');
       await this._authenticate();
-      return await fetch(url, {
+      res = await fetch(url, {
         ...options,
         headers: {
           ...options.headers,
           Authorization: `Bearer ${this._token}`,
         },
+        signal: AbortSignal.timeout(HTTP_TIMEOUT),
+      }).catch((err) => {
+        if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+          throw new Error(`Request timed out after ${HTTP_TIMEOUT / 1000}s`);
+        }
+        throw err;
       });
     }
     return res;
@@ -116,9 +175,8 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
 
   async _fetchRooms() {
     const res = await this._fetchWithAuth(`${API_BASE}/rest/v1/content/`);
-    if (!res) return null;
     if (res.status === 429) {
-      this.log.warn('API rate limited during poll');
+      this.log.warn('API rate limited during fetchRooms');
       return null;
     }
     if (!res.ok) throw new Error(`Fetch rooms HTTP ${res.status}`);
@@ -172,7 +230,7 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
         const prevSetpoint = this._lastApiValues.get(room.id);
         if (prevSetpoint && prevSetpoint.setpoint === value) return;
         const temp = value / 100;
-        this.log.info(`${name}: heatingSetpoint changed to ${temp}C`);
+        this.log.info(`${name}: heatingSetpoint changed to ${temp}\u00b0C`);
         this._setTargetTemp(room.id, name, temp, true);
       },
       this.log,
@@ -185,7 +243,7 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
         const prevCool = this._lastApiValues.get(room.id);
         if (prevCool && prevCool.setpoint === value) return;
         const temp = value / 100;
-        this.log.info(`${name}: coolingSetpoint changed to ${temp}C`);
+        this.log.info(`${name}: coolingSetpoint changed to ${temp}\u00b0C`);
         this._setTargetTemp(room.id, name, temp, true);
       },
       this.log,
@@ -233,49 +291,67 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
       } else if (heatingEnabled === false) {
         body.rooms[0].heatingEnabled = 'false';
       } else if (temperature != null) {
-        const tempHundredths = Math.round(temperature * 100);
-        body.rooms[0].targetTemperature = String(tempHundredths);
+        body.rooms[0].targetTemperature = String(Math.round(temperature * 100));
       } else {
         return;
       }
-      const res = await this._fetchWithAuth(`${API_BASE}/rest/v1/control/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+
+      await this._enqueueApiCall(async () => {
+        const res = await this._fetchWithAuth(`${API_BASE}/rest/v1/control/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (res.status === 429) {
+          this.log.warn(`${name}: API rate limited`);
+          return;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        this.log.info(`${name}: set target to ${JSON.stringify(body.rooms[0])}`);
       });
-      if (res.status === 429) {
-        this.log.warn(`${name}: API rate limited, backing off`);
-        return;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      this.log.info(`${name}: set target to ${JSON.stringify(body.rooms[0])}`);
-      if (this._pollTimer) clearTimeout(this._pollTimer);
-      this._pollTimer = setTimeout(() => this._pollAll(), 2_000);
     } catch (err) {
       this.log.error(`${name}: Set temp failed: ${err.message}`);
     }
   }
 
-  async _pollAll() {
-    if (this._polling) return;
-    this._polling = true;
+  _schedulePoll(delay) {
+    if (this._pollTimer) clearTimeout(this._pollTimer);
+    const base = Math.max(this.config.pollInterval ?? 60_000, 30_000);
+    const factor = Math.min(this._consecutiveErrors, 5);
+    const actualDelay = delay ?? Math.min(base * Math.pow(2, factor), 300_000);
+    if (actualDelay !== base) {
+      this.log.info(
+        `Backoff active: next poll in ${Math.round(actualDelay / 1000)}s (base ${base / 1000}s, error #${this._consecutiveErrors})`,
+      );
+    }
+    this._pollTimer = setTimeout(() => this._doPoll(), actualDelay);
+  }
+
+  async _doPoll() {
     try {
-      const rooms = await this._fetchRooms();
-      if (rooms === null) {
+      const rooms = await this._enqueueApiCall(async () => {
+        const roomsData = await this._fetchRooms();
+        return roomsData;
+      });
+
+      if (rooms === null || rooms === undefined) {
         this._consecutiveErrors++;
-        this.log.warn(`Poll failed, consecutive errors: ${this._consecutiveErrors}`);
+        this.log.warn(`Poll returned null, consecutive errors: ${this._consecutiveErrors}`);
         return;
       }
+
       this._consecutiveErrors = 0;
+
       for (const room of rooms) {
         const deviceData = this._rooms.find((r) => r.id === room.id);
         if (!deviceData) continue;
         this._updateState(deviceData.device, room, deviceData.name);
       }
     } catch (err) {
+      this._consecutiveErrors++;
       this.log.error(`Poll error: ${err.message}`);
     } finally {
-      this._polling = false;
+      this._schedulePoll();
     }
   }
 
@@ -289,7 +365,9 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
       this._lastNonZeroTarget.set(room.id, targetHundredths);
     }
 
-    const displayTarget = targetHundredths > 0 ? targetHundredths : (this._lastNonZeroTarget.get(room.id) ?? 2100);
+    const displayTarget = targetHundredths > 0
+      ? targetHundredths
+      : (this._lastNonZeroTarget.get(room.id) ?? 2100);
     const systemMode = heating ? 4 : 0;
 
     this._lastApiValues.set(room.id, {
@@ -322,7 +400,6 @@ export class AdaxMatterbridgePlatform extends MatterbridgeDynamicPlatform {
 
   async onShutdown(reason) {
     this.log.info('Adax plugin shutdown', reason);
-    if (this._interval) clearInterval(this._interval);
     if (this._pollTimer) clearTimeout(this._pollTimer);
     if (this.config.unregisterOnShutdown === true) {
       for (const { device } of this._rooms) {

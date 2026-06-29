@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 — 2026-06-29
+
+### Added
+- Adax 30-second API rate limit is strictly respected (matches pyAdax library behaviour)
+- Serialised API request queue prevents concurrent fetch collisions between poll and commands
+- Exponential backoff on consecutive poll failures (doubles interval up to 5 min)
+- 10-second HTTP timeout on all API calls prevents event-loop blocking
+- Optimistic state updates after commands (no post-command poll that triggered rate limits)
+- Poll interval default changed to 60s (minimum 30s) to stay within API rate limit
+
+### Fixed
+- Eliminated "No Response" by serialising all API traffic and preventing rate-limit cascading failures
+
 ## 0.2.1 — 2026-06-26
 
 ### Fixed
