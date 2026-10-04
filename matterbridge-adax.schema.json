@@ -45,15 +45,19 @@
       "title": "Client Secret",
       "description": "Adax API client secret from Adax WiFi app: Account → Remote user client API → Add Credential",
       "type": "string",
-      "default": ""
+      "default": "",
+      "ui:widget": "password"
     },
     "pollInterval": {
       "title": "Poll interval (ms)",
-      "description": "How often the Adax API is polled (minimum 10000)",
+      "description": "How often the Adax API is polled (minimum 30000). The API allows about one request per 30 seconds; the plugin spaces all requests accordingly. Failing polls are retried less often (backoff up to 5 min).",
       "type": "number",
-      "default": 30000,
-      "minimum": 10000
+      "default": 60000,
+      "minimum": 30000
     }
   },
-  "required": ["accountId", "clientSecret"]
+  "required": [
+    "accountId",
+    "clientSecret"
+  ]
 }

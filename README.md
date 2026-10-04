@@ -7,7 +7,7 @@ Exposes Adax WiFi heaters as Matter thermostats via [Matterbridge](https://githu
 ## Prerequisites
 
 - [Matterbridge](https://github.com/Luligu/matterbridge) >= 3.9.0
-- Node.js >= 20
+- Node.js >= 20.3
 - An Adax WiFi account with heaters configured in the Adax WiFi app
 - API credentials generated in the Adax WiFi app (Account → Remote user client API → Add Credential)
 
@@ -25,9 +25,9 @@ matterbridge --enable matterbridge-adax
 Clone or copy the plugin to your Matterbridge plugins directory:
 
 ```bash
-git clone https://github.com/maxbengtzen/matterbridge-adax.git /root/Matterbridge/matterbridge-adax
-matterbridge --add /root/Matterbridge/matterbridge-adax
-matterbridge --enable /root/Matterbridge/matterbridge-adax
+git clone https://github.com/maxbengtzen/matterbridge-adax.git ~/Matterbridge/matterbridge-adax
+matterbridge --add ~/Matterbridge/matterbridge-adax
+matterbridge --enable ~/Matterbridge/matterbridge-adax
 ```
 
 ## Configuration
@@ -47,7 +47,8 @@ Configure via Matterbridge frontend UI at `http://<host>:8283` or by editing the
 |---|---|---|---|
 | `accountId` | number | (required) | Your numeric Adax account ID from the Adax WiFi app |
 | `clientSecret` | string | (required) | Client secret generated in Adax WiFi app |
-| `pollInterval` | number | `30000` | Polling interval in milliseconds (minimum 10000) |
+| `pollInterval` | number | `60000` | Polling interval in milliseconds (minimum 30000) |
+| `unregisterOnShutdown` | boolean | `false` | Unregister devices when Matterbridge stops (development only; loses room assignments in Apple Home) |
 | `debug` | boolean | `false` | Enable verbose debug logging |
 
 ### Example
@@ -56,23 +57,34 @@ Configure via Matterbridge frontend UI at `http://<host>:8283` or by editing the
 {
   "accountId": 123456,
   "clientSecret": "your-generated-secret",
-  "pollInterval": 30000,
+  "pollInterval": 60000,
   "debug": false
 }
 ```
 
 ## How it works
 
-The plugin authenticates with the Adax cloud API using OAuth2 (password grant), fetches the list of rooms/heaters, and polls their status at the configured interval. Each heater is exposed as a Matter thermostat with:
+The plugin authenticates with the Adax cloud API using OAuth2 (password grant), fetches the rooms and polls their status at the configured interval. Each room is exposed as a Matter thermostat with:
 
 - Current temperature (`localTemperature`)
-- Target temperature (`occupiedHeatingSetpoint`)
-- System mode (off/heat)
-Changes made in Apple Home (or any Matter controller) are sent back to the Adax cloud API via REST.
+- Target temperature (`occupiedHeatingSetpoint` / `occupiedCoolingSetpoint`, always the same value)
+- System mode (off / heat)
+- Reachability: after 3 failed polls in a row the devices show as unreachable until the API answers again
 
-## Rate Limiting
+Changes made in Apple Home (or any Matter controller) are sent to the Adax cloud via REST. Slider drags are debounced, changes to several rooms are sent in a single request, and the state is re-read shortly after each command to confirm the result. Rooms added in the Adax app later are registered automatically.
 
-The Adax API enforces a rate limit of 1 request per 30 seconds. The plugin handles this by sharing the same API session across all rooms. Keep `pollInterval` at 30000 or higher to stay within limits.
+## Rate limiting
+
+The Adax API answers HTTP 429 if it is called too often, in practice about once per 30 seconds (Adax's public documentation does not state a limit; 30 s is the value used by the pyAdax library). The plugin therefore spaces **all** API calls at least 30 seconds apart, sends commands before polls, merges pending changes into one request, and pauses for a minute after a 429. The consequence is that a change in Home can take up to about 30 seconds to reach the heater if another request was just made; the controller shows the new value immediately in the meantime. Keep `pollInterval` at 60000 or higher.
+
+## Development
+
+```bash
+npm test        # unit tests + platform tests against a fake Adax API and a stubbed Matterbridge, no dependencies
+npm run check   # syntax check
+```
+
+`dist/adax.js` holds the API client and the mapping logic and has no Matterbridge dependency; `dist/module.js` is the Matterbridge platform.
 
 ## API Reference
 
