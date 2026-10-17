@@ -100,7 +100,11 @@ npm run check   # typecheck, tests, build dist/
 
 `matterbridge` is not listed in `package.json`: Matterbridge refuses to load a plugin that has it in any dependency list. `npm run setup` installs it without saving it (the version the server runs), the same role `npm link matterbridge` has in the official plugin template. A later `npm install` removes it again; rerun `npm run setup`.
 
-To release, add the changes to `CHANGELOG.md` and run `npm version patch|minor|major`. It runs `npm run check` first and commits a freshly built `dist/` together with the version bump.
+To release: describe the changes under `## Unreleased` in `CHANGELOG.md`, commit, and run `npm version patch|minor|major`. It refuses an empty Unreleased section, runs `npm run check`, turns Unreleased into the new version with today's date, and commits a freshly built `dist/` with the version bump and a `vX.Y.Z` tag. Push with `git push --follow-tags` and create the GitHub release from the changelog:
+
+```bash
+gh release create v0.4.1 --title v0.4.1 --notes "$(node scripts/changelog.ts notes 0.4.1)"
+```
 
 ## API Reference
 

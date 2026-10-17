@@ -35,8 +35,8 @@
     "typecheck": "tsc",
     "test": "node --test \"test/*.test.ts\"",
     "check": "npm run typecheck && npm test && npm run build",
-    "preversion": "npm run check",
-    "version": "npm run build && git add dist"
+    "preversion": "node scripts/changelog.ts check && npm run check",
+    "version": "node scripts/changelog.ts release && npm run build && git add CHANGELOG.md dist"
   },
   "files": [
     "dist",
