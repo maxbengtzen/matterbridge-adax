@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- The plugin is now written in TypeScript (`src/`), type checked against Matterbridge's own types and compiled to `dist/` with `tsc`. The tests are TypeScript too. No change in behaviour: the old test suite passes unchanged against the new `dist/`.
+- Development needs Node.js 24 (see README → Development); running the plugin still needs Node.js >= 20.3.
+
+### Upgrade notes
+- Nothing to do. Config, devices and Apple Home setup are unaffected.
+
 ## 0.4.0 — 2026-10-04
 
 Reliability release: fixes bugs found in a code review, makes better use of the Adax API's rate limit, and adds a test suite. Existing installations upgrade without changes to their config or their Apple Home setup.

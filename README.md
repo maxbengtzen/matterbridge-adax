@@ -79,12 +79,28 @@ The Adax API answers HTTP 429 if it is called too often, in practice about once 
 
 ## Development
 
+The plugin is written in TypeScript. `src/` is the source; `dist/` is the JavaScript that Matterbridge loads (`main` in `package.json`) and is built from `src/` with `tsc`. `dist/` is committed so the plugin can be installed straight from a git clone without a build step; CI fails if it does not match `src/`.
+
+`src/adax.ts` holds the API client and the mapping logic and has no Matterbridge dependency; `src/module.ts` is the Matterbridge platform.
+
+Requires Node.js 24 or later for development (the tests run the TypeScript directly). The built plugin still runs on Node.js >= 20.3.
+
 ```bash
-npm test        # unit tests + platform tests against a fake Adax API and a stubbed Matterbridge, no dependencies
-npm run check   # syntax check
+npm install     # TypeScript and Node types
+npm run setup   # matterbridge, for its types only (see below)
+npm run check   # typecheck, tests, build dist/
 ```
 
-`dist/adax.js` holds the API client and the mapping logic and has no Matterbridge dependency; `dist/module.js` is the Matterbridge platform.
+| Script | What it does |
+|---|---|
+| `npm run build` | Compile `src/` to `dist/` |
+| `npm run typecheck` | Type check `src/` and `test/` without writing files |
+| `npm test` | Unit tests and platform tests (`node:test`) against a fake Adax API and a stubbed Matterbridge, no network |
+| `npm run check` | All of the above |
+
+`matterbridge` is not listed in `package.json`: Matterbridge refuses to load a plugin that has it in any dependency list. `npm run setup` installs it without saving it (the version the server runs), the same role `npm link matterbridge` has in the official plugin template. A later `npm install` removes it again; rerun `npm run setup`.
+
+To release, add the changes to `CHANGELOG.md` and run `npm version patch|minor|major`. It runs `npm run check` first and commits a freshly built `dist/` together with the version bump.
 
 ## API Reference
 

@@ -10,13 +10,13 @@ import {
   normalizePollInterval,
   parseRoom,
   RateLimitError,
-} from '../dist/adax.js';
-import { fakeApi } from './fake-api.js';
+} from '../src/adax.ts';
+import { fakeApi } from './fake-api.ts';
 
 const flush = async () => {
   for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
 };
-const tick = async (ms) => {
+const tick = async (ms: number) => {
   mock.timers.tick(ms);
   await flush();
 };
@@ -81,8 +81,8 @@ describe('scheduling helpers', () => {
 });
 
 describe('AdaxClient', () => {
-  let api;
-  let client;
+  let api: ReturnType<typeof fakeApi>;
+  let client: AdaxClient;
   const rooms = () => [
     { id: 1, name: 'A', temperature: 2000, targetTemperature: 2100, heatingEnabled: true },
     { id: 2, name: 'B', temperature: 1900, targetTemperature: 0, heatingEnabled: false },
@@ -126,7 +126,7 @@ describe('AdaxClient', () => {
     const { rooms: got } = await second;
     assert.equal(got.length, 2);
     assert.equal(api.tokenCalls, 2);
-    assert.equal(api.requests.at(-1).headers.Authorization, 'Bearer tok2');
+    assert.equal(api.requests.at(-1)!.headers.Authorization, 'Bearer tok2');
   });
 
   it('reports bad credentials clearly', async () => {
@@ -154,10 +154,10 @@ describe('AdaxClient', () => {
     const control = client.control({ id: 1, targetTemperature: 2300, heatingEnabled: true });
     await tick(30_000);
     await control;
-    assert.equal(api.requests.at(-1).path, '/rest/v1/control/');
+    assert.equal(api.requests.at(-1)!.path, '/rest/v1/control/');
     await tick(30_000);
     await poll;
-    assert.equal(api.requests.at(-1).path, '/rest/v1/content/');
+    assert.equal(api.requests.at(-1)!.path, '/rest/v1/content/');
   });
 
   it('shares one request between callers that poll at the same time', async () => {
@@ -214,7 +214,7 @@ describe('AdaxClient', () => {
       accountId: 1,
       clientSecret: 'x',
       timeout: 20,
-      fetchImpl: (_url, { signal }) => new Promise((_res, rej) => signal.addEventListener('abort', () => rej(signal.reason))),
+      fetchImpl: (_url, { signal }) => new Promise((_res, rej) => signal!.addEventListener('abort', () => rej(signal!.reason))),
     });
     const pending = assert.rejects(slow.fetchRooms(), /timed out after 0\.02s/);
     await tick(25);

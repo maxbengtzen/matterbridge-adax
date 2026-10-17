@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
-import './helpers/register-stubs.js';
-import { fakeApi } from './fake-api.js';
+import type { AnsiLogger } from 'matterbridge/logger';
+import type { AdaxPlatformConfig } from '../src/module.ts';
+import { fakeApi } from './fake-api.ts';
+import './helpers/register-stubs.ts';
+import type { MatterbridgeEndpoint as StubEndpoint } from './helpers/matterbridge-stub.ts';
 
-const { AdaxMatterbridgePlatform } = await import('../dist/module.js');
+// Imported after the stubs are registered, so `matterbridge` resolves to the stub.
+const { AdaxMatterbridgePlatform } = await import('../src/module.ts');
 
 const THERMOSTAT = 513;
 const BRIDGED_BASIC_INFO = 57;
@@ -14,50 +18,54 @@ const makeRooms = () => [
 ];
 
 const makeLog = () => {
-  const lines = [];
-  const log = { lines };
-  for (const level of ['debug', 'info', 'warn', 'error']) log[level] = (...a) => lines.push([level, a.join(' ')]);
+  const lines: [string, string][] = [];
+  const log: Record<string, unknown> & { lines: typeof lines } = { lines };
+  for (const level of ['debug', 'info', 'warn', 'error']) log[level] = (...a: unknown[]) => lines.push([level, a.join(' ')]);
   return log;
 };
 
 const flush = async () => {
   for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
 };
-const tick = async (ms) => {
+const tick = async (ms: number) => {
   mock.timers.tick(ms);
   await flush();
 };
 
 // Advance time in small steps so chained work (poll -> response -> next timer) can run between timers.
-const advance = async (ms, step = 1_000) => {
+const advance = async (ms: number, step = 1_000) => {
   for (let t = 0; t < ms; t += step) await tick(Math.min(step, ms - t));
 };
 
 describe('AdaxMatterbridgePlatform', () => {
-  let api;
-  let realFetch;
-  let platform;
-  let log;
+  let api: ReturnType<typeof fakeApi>;
+  let realFetch: typeof fetch;
+  let platform: InstanceType<typeof AdaxMatterbridgePlatform> | undefined;
+  let log: ReturnType<typeof makeLog>;
 
-  const start = async (config = {}, { before } = {}) => {
+  // The devices the stubbed platform has registered.
+  const registered = () => (platform as unknown as { registered: StubEndpoint[] }).registered;
+
+  const start = async (
+    config: Partial<AdaxPlatformConfig> = {},
+    { before }: { before?: (a: typeof api) => void } = {},
+  ) => {
     api = fakeApi(makeRooms());
     before?.(api);
     globalThis.fetch = api.fetch;
     log = makeLog();
-    platform = new AdaxMatterbridgePlatform({ matterbridgeVersion: '3.10.0' }, log, {
-      accountId: 123,
-      clientSecret: 'secret',
-      pollInterval: 60_000,
-      ...config,
-    });
+    platform = new AdaxMatterbridgePlatform(
+      { matterbridgeVersion: '3.10.0' } as never,
+      log as unknown as AnsiLogger,
+      { accountId: 123, clientSecret: 'secret', pollInterval: 60_000, ...config } as AdaxPlatformConfig,
+    );
     const started = platform.onStart('test');
     await flush();
     await started;
     await flush();
-    return platform.registered;
+    return registered();
   };
-  const room = (id) => platform._rooms.get(id);
-  const get = (device, attribute) => device.getAttribute(THERMOSTAT, attribute);
+  const get = (device: StubEndpoint, attribute: string) => device.getAttribute(THERMOSTAT, attribute);
 
   beforeEach(() => {
     realFetch = globalThis.fetch;
@@ -81,7 +89,7 @@ describe('AdaxMatterbridgePlatform', () => {
 
   it('logs an error and does nothing without credentials', async () => {
     await start({ accountId: '', clientSecret: '' });
-    assert.equal(platform.registered.length, 0);
+    assert.equal(registered().length, 0);
     assert.equal(api.requests.length, 0);
     assert.ok(log.lines.some(([level]) => level === 'error'));
   });
@@ -155,7 +163,7 @@ describe('AdaxMatterbridgePlatform', () => {
 
   it('setpointRaiseLower raises by the requested tenths of a degree (regression: was 0.1 x too little)', async () => {
     const [living] = await start();
-    const handler = living.commandHandlers.get('setpointRaiseLower');
+    const handler = living.commandHandlers.get('setpointRaiseLower')!;
     handler({ request: { mode: 0, amount: 10 } }); // +1.0 °C
     handler({ request: { mode: 0, amount: 5 } }); // +0.5 °C on top
     await flush();
@@ -179,7 +187,7 @@ describe('AdaxMatterbridgePlatform', () => {
 
   it('does not let a stale in-flight poll flip a controller change back', async () => {
     const [living] = await start();
-    let release;
+    let release!: (value?: unknown) => void;
     api.gate = new Promise((r) => (release = r)); // the next poll is slow
     await tick(60_000); // poll starts and hangs, carrying the old state
     living.writeFromController(THERMOSTAT, 'systemMode', 0);
@@ -231,18 +239,18 @@ describe('AdaxMatterbridgePlatform', () => {
 
   it('recovers when the first load fails: no devices at first, then they appear', async () => {
     await start({}, { before: (a) => a.nextStatus.push(500) });
-    assert.equal(platform.registered.length, 0);
+    assert.equal(registered().length, 0);
     assert.ok(log.lines.some(([level, msg]) => level === 'error' && msg.includes('Could not load rooms')));
     await tick(30_000);
-    assert.equal(platform.registered.length, 2);
+    assert.equal(registered().length, 2);
   });
 
   it('registers rooms that are added in the Adax app later', async () => {
     await start();
     api.rooms.push({ id: 3, name: 'Bathroom', temperature: 2300, targetTemperature: 2400, heatingEnabled: true });
     await tick(60_000);
-    assert.equal(platform.registered.length, 3);
-    assert.equal(platform.registered[2].id, 'adax-3');
+    assert.equal(registered().length, 3);
+    assert.equal(registered()[2].id, 'adax-3');
   });
 
   it('marks devices unreachable after repeated failures and recovers', async () => {
@@ -257,14 +265,14 @@ describe('AdaxMatterbridgePlatform', () => {
     }
     await advance(300_000); // backoff is capped at 5 min; the API answers again
     for (const device of [living, hall]) {
-      assert.equal(device.events.at(-1).payload.reachableNewValue, true);
+      assert.equal(device.events.at(-1)!.payload.reachableNewValue, true);
       assert.equal(device.getAttribute(BRIDGED_BASIC_INFO, 'reachable'), true);
     }
   });
 
   it('stops polling and aborts on shutdown', async () => {
     await start();
-    await platform.onShutdown('test');
+    await platform!.onShutdown('test');
     const before = api.requests.length;
     await tick(600_000);
     assert.equal(api.requests.length, before);
@@ -272,10 +280,10 @@ describe('AdaxMatterbridgePlatform', () => {
 
   it('does not restart its timer when shutdown happens during a poll', async () => {
     await start();
-    let release;
+    let release!: (value?: unknown) => void;
     api.gate = new Promise((r) => (release = r));
     await tick(60_000); // poll hangs
-    const shutdown = platform.onShutdown('test');
+    const shutdown = platform!.onShutdown('test');
     release();
     await shutdown;
     await flush();

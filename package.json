@@ -30,8 +30,13 @@
     "thermostat"
   ],
   "scripts": {
-    "test": "node --test \"test/*.test.js\"",
-    "check": "node --check dist/module.js && node --check dist/adax.js"
+    "setup": "npm install --no-save --no-fund --no-audit matterbridge@3.10.13",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc",
+    "test": "node --test \"test/*.test.ts\"",
+    "check": "npm run typecheck && npm test && npm run build",
+    "preversion": "npm run check",
+    "version": "npm run build && git add dist"
   },
   "files": [
     "dist",
@@ -39,5 +44,9 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
-  ]
+  ],
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  }
 }
