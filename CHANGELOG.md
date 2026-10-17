@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.1 — 2026-10-17
+
 ### Changed
 - The plugin is now written in TypeScript (`src/`), type checked against Matterbridge's own types and compiled to `dist/` with `tsc`. The tests are TypeScript too. No change in behaviour: the old test suite passes unchanged against the new `dist/`.
 - Development needs Node.js 24 (see README → Development); running the plugin still needs Node.js >= 20.3.
