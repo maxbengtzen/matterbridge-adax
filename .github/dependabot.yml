@@ -1,0 +1,33 @@
+# Commit prefixes: fix(deps) for runtime dependencies and the Docker base image, chore(deps) for
+# dev dependencies and actions (with release-please, only fix(deps) produces a release).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "chore(deps)"
+    # Matterbridge refuses to load a plugin that has matterbridge or @matter/* in its dependencies;
+    # the types come from the global install (npm run setup), never from package.json.
+    ignore:
+      - dependency-name: "matterbridge"
+      - dependency-name: "@matter/*"
+      - dependency-name: "@project-chip/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+    # The shared workflows repo is private; Dependabot can't read it
+    ignore:
+      - dependency-name: "maxbengtzen/workflows*"
